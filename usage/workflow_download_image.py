@@ -15,7 +15,7 @@ def get_env(name):
 def get_jm_album_ids():
     from common import str_to_set
 
-    jm_albums = []
+    jm_albums = ""
     aid_set = set()
     for text in [
         jm_albums,
