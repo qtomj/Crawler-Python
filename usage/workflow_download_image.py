@@ -21,6 +21,7 @@ def get_jm_album_ids():
         jm_albums,
         (get_env('JM_ALBUM_IDS') or '').replace('-', '\n'),
     ]:
+        print(text)
         aid_set.update(str_to_set(text))
 
     return aid_set
