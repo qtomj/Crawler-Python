@@ -5,6 +5,13 @@ opfile = '../assets/config/option_workflow_download.yml'
 option = create_option(opfile)
 client: JmcomicClient = option.build_jm_client()
 
+def get_env(name):
+    import os
+    value = os.getenv(name, None)
+    if value is None or value == '':
+        return None
+    return value
+
 def get_jm_album_ids():
     from common import str_to_set
 
