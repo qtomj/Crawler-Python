@@ -30,6 +30,9 @@ def download_by_url(album_id, url: str):
     photo_id = JmcomicText.parse_to_photo_id(url)  # 400222
     filename = url[url.rindex('/'):url.rindex('?')]  # 00001.webp
     default_save_dir = get_env('JM_DOWNLOAD_DIR')
+    import os
+    if not os.path.exists(f'{default_save_dir}{album_id}'):
+        os.makedirs(f'{default_save_dir}{album_id}')
     client.download_image(
         img_url=url,
         img_save_path=f'{default_save_dir}{album_id}{filename}',
