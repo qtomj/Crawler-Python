@@ -43,4 +43,7 @@ if __name__ == '__main__':
     for album_id in get_jm_album_ids():
         urls = ['https://cdn-msp.jm-comic1.club/media/photos/{0}/{1}.webp?v=1692375790'.format(album_id, str(i).zfill(5)) for i in range(1, 150)]
         for url in urls:
-            download_by_url(album_id, url)
+            try:
+                download_by_url(album_id, url)
+            except:
+                pass
