@@ -32,7 +32,7 @@ def download_by_url(album_id, url: str):
     default_save_dir = get_env('JM_DOWNLOAD_DIR')
     client.download_image(
         img_url=url,
-        img_save_path=f'{default_dir}/{album_id}/{filename}',
+        img_save_path=f'{default_save_dir}/{album_id}/{filename}',
     )
 
 
