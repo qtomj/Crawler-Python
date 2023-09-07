@@ -85,7 +85,7 @@ jobs:
       - name: 压缩文件
         run: |
           cd $JM_DOWNLOAD_DIR
-          tar -zcvf "../$ZIP_NAME" ./
+          tar -zcvf - ./ | openssl des3 -salt -k password -out "../$ZIP_NAME"
           mv "../$ZIP_NAME" .
 
       - name: 上传结果
