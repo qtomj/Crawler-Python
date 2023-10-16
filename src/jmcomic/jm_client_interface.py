@@ -6,6 +6,8 @@ Response Entity
 
 """
 
+DictModel = AdvancedEasyAccessDict
+
 
 class JmResp(CommonResp):
 
@@ -19,6 +21,10 @@ class JmResp(CommonResp):
     def model(self) -> DictModel:
         return DictModel(self.json())
 
+    def require_success(self):
+        if self.is_not_success:
+            ExceptionTool.raises_resp(self.text, self.resp)
+
 
 class JmImageResp(JmResp):
 
@@ -26,10 +32,7 @@ class JmImageResp(JmResp):
         raise NotImplementedError
 
     def require_success(self):
-        if self.is_success:
-            return
-
-        raise JmModuleConfig.exception(self.get_error_msg())
+        ExceptionTool.require_true(self.is_success, self.get_error_msg())
 
     def get_error_msg(self):
         msg = f'禁漫图片获取失败: [{self.url}]'
@@ -49,16 +52,16 @@ class JmImageResp(JmResp):
 
         if decode_image is False:
             # 不解密图片，直接保存文件
-            JmImageSupport.save_resp_img(
+            JmImageTool.save_resp_img(
                 self,
                 path,
                 need_convert=suffix_not_equal(img_url, path),
             )
         else:
             # 解密图片并保存文件
-            JmImageSupport.decode_and_save(
-                JmImageSupport.get_num_by_url(scramble_id, img_url),
-                JmImageSupport.open_Image(self.content),
+            JmImageTool.decode_and_save(
+                JmImageTool.get_num_by_url(scramble_id, img_url),
+                JmImageTool.open_Image(self.content),
                 path,
             )
 
@@ -67,8 +70,7 @@ class JmApiResp(JmResp):
 
     @classmethod
     def wrap(cls, resp, key_ts):
-        if isinstance(resp, JmApiResp):
-            raise JmModuleConfig.exception('重复包装')
+        ExceptionTool.require_true(not isinstance(resp, JmApiResp), f'重复包装: {resp}')
 
         return cls(resp, key_ts)
 
@@ -76,6 +78,10 @@ class JmApiResp(JmResp):
         super().__init__(resp)
         self.key_ts = key_ts
         self.cache_decode_data = None
+
+    @property
+    def is_success(self) -> bool:
+        return super().is_success and self.json()['code'] == 200
 
     @staticmethod
     def parse_data(text, time) -> str:
@@ -98,11 +104,9 @@ class JmApiResp(JmResp):
         return res
 
     @property
+    @field_cache('__cache_decoded_data__')
     def decoded_data(self) -> str:
-        if self.cache_decode_data is None:
-            self.cache_decode_data = self.parse_data(self.encoded_data, self.key_ts)
-
-        return self.cache_decode_data
+        return self.parse_data(self.encoded_data, self.key_ts)
 
     @property
     def encoded_data(self) -> str:
@@ -114,6 +118,7 @@ class JmApiResp(JmResp):
         from json import loads
         return loads(self.decoded_data)
 
+    @field_cache('__cache_json__')
     def json(self, **kwargs) -> Dict:
         return self.resp.json()
 
@@ -132,9 +137,6 @@ class JmAcResp(JmResp):
     def json(self, **kwargs) -> Dict:
         return self.resp.json()
 
-    def model(self) -> DictModel:
-        return DictModel(self.json())
-
 
 """
 
@@ -148,7 +150,11 @@ class JmDetailClient:
     def get_album_detail(self, album_id) -> JmAlbumDetail:
         raise NotImplementedError
 
-    def get_photo_detail(self, photo_id, fetch_album=True) -> JmPhotoDetail:
+    def get_photo_detail(self,
+                         photo_id,
+                         fetch_album=True,
+                         fetch_scramble_id=True,
+                         ) -> JmPhotoDetail:
         raise NotImplementedError
 
     def of_api_url(self, api_path, domain):
@@ -232,7 +238,7 @@ class JmImageClient:
         @param decode_image: 要保存的是解密后的图还是原图
         """
         if scramble_id is None:
-            scramble_id = JmModuleConfig.SCRAMBLE_0
+            scramble_id = JmModuleConfig.SCRAMBLE_220980
 
         # 请求图片
         resp = self.get_jm_image(img_url)
@@ -245,7 +251,7 @@ class JmImageClient:
         # gif图无需加解密，需要最先判断
         if self.img_is_not_need_to_decode(img_url, resp):
             # 相当于调用save_directly，但使用save_resp_img可以统一调用入口
-            JmImageSupport.save_resp_img(resp, img_save_path, False)
+            JmImageTool.save_resp_img(resp, img_save_path, False)
         else:
             resp.transfer_to(img_save_path, scramble_id, decode_image, img_url)
 
@@ -285,41 +291,82 @@ class JmSearchAlbumClient:
     範例:全彩 人妻
     """
 
-    def search(self, search_query: str, page: int, main_tag: int) -> JmSearchPage:
+    ORDER_BY_LATEST = 'mr'
+    ORDER_BY_VIEW = 'mv'
+    ORDER_BY_PICTURE = 'mp'
+    ORDER_BY_LIKE = 'tf'
+
+    TIME_TODAY = 't'
+    TIME_WEEK = 'w'
+    TIME_MONTH = 'm'
+    TIME_ALL = 'a'
+
+    def search(self,
+               search_query: str,
+               page: int,
+               main_tag: int,
+               order_by: str,
+               time: str,
+               ) -> JmSearchPage:
         """
         搜索【成人A漫】
         """
         raise NotImplementedError
 
-    def search_site(self, search_query: str, page: int = 1) -> JmSearchPage:
+    def search_site(self,
+                    search_query: str,
+                    page: int = 1,
+                    order_by: str = ORDER_BY_LATEST,
+                    time: str = TIME_ALL,
+                    ):
         """
         对应禁漫的站内搜索
         """
-        return self.search(search_query, page, 0)
+        return self.search(search_query, page, 0, order_by, time)
 
-    def search_work(self, search_query: str, page: int = 1) -> JmSearchPage:
+    def search_work(self,
+                    search_query: str,
+                    page: int = 1,
+                    order_by: str = ORDER_BY_LATEST,
+                    time: str = TIME_ALL,
+                    ):
         """
         搜索album的作品 work
         """
-        return self.search(search_query, page, 1)
+        return self.search(search_query, page, 1, order_by, time)
 
-    def search_author(self, search_query: str, page: int = 1) -> JmSearchPage:
+    def search_author(self,
+                      search_query: str,
+                      page: int = 1,
+                      order_by: str = ORDER_BY_LATEST,
+                      time: str = TIME_ALL,
+                      ):
         """
         搜索album的作者 author
         """
-        return self.search(search_query, page, 2)
+        return self.search(search_query, page, 2, order_by, time)
 
-    def search_tag(self, search_query: str, page: int = 1) -> JmSearchPage:
+    def search_tag(self,
+                   search_query: str,
+                   page: int = 1,
+                   order_by: str = ORDER_BY_LATEST,
+                   time: str = TIME_ALL,
+                   ):
         """
         搜索album的标签 tag
         """
-        return self.search(search_query, page, 3)
+        return self.search(search_query, page, 3, order_by, time)
 
-    def search_actor(self, search_query: str, page: int = 1) -> JmSearchPage:
+    def search_actor(self,
+                     search_query: str,
+                     page: int = 1,
+                     order_by: str = ORDER_BY_LATEST,
+                     time: str = TIME_ALL,
+                     ):
         """
         搜索album的登场角色 actor
         """
-        return self.search(search_query, page, 4)
+        return self.search(search_query, page, 4, order_by, time)
 
 
 # noinspection PyAbstractClass
@@ -330,14 +377,22 @@ class JmcomicClient(
     JmSearchAlbumClient,
     Postman,
 ):
-    def get_jmcomic_url(self):
-        return JmModuleConfig.get_jmcomic_url()
-
-    def get_jmcomic_domain_all(self):
-        return JmModuleConfig.get_jmcomic_domain_all()
+    client_key: None
 
     def get_domain_list(self) -> List[str]:
+        """
+        获取当前client的域名配置
+        """
         raise NotImplementedError
 
     def set_domain_list(self, domain_list: List[str]):
+        """
+        设置当前client的域名配置
+        """
         raise NotImplementedError
+
+    def get_html_domain(self, postman=None):
+        return JmModuleConfig.get_html_domain(postman or self.get_root_postman())
+
+    def get_html_domain_all(self, postman=None):
+        return JmModuleConfig.get_html_domain_all(postman or self.get_root_postman())

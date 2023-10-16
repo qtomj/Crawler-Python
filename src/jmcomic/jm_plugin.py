@@ -1,5 +1,5 @@
 """
-该文件存放的是option扩展功能类
+该文件存放的是option插件
 """
 
 from .jm_option import *
@@ -27,12 +27,10 @@ class JmOptionPlugin:
         return cls(option)
 
 
-"""
-扩展功能：登录禁漫，并保存登录后的cookies，让所有client都带上此cookies
-"""
-
-
 class JmLoginPlugin(JmOptionPlugin):
+    """
+    功能：登录禁漫，并保存登录后的cookies，让所有client都带上此cookies
+    """
     plugin_key = 'login'
 
     def invoke(self, username, password) -> None:
@@ -55,18 +53,33 @@ class UsageLogPlugin(JmOptionPlugin):
 
     def invoke(self, **kwargs) -> None:
         import threading
-        threading.Thread(
+        t = threading.Thread(
             target=self.monitor_resource_usage,
             kwargs=kwargs,
             daemon=True,
-        ).start()
+        )
+        t.start()
+
+        self.set_thread_as_option_attr(t)
+
+    def set_thread_as_option_attr(self, t):
+        """
+        线程留痕
+        """
+        name = f'thread_{self.plugin_key}'
+
+        thread_ls: Optional[list] = getattr(self.option, name, None)
+        if thread_ls is None:
+            setattr(self.option, name, [t])
+        else:
+            thread_ls.append(t)
 
     def monitor_resource_usage(
             self,
             interval=1,
             enable_warning=True,
             warning_cpu_percent=70,
-            warning_mem_percent=50,
+            warning_mem_percent=70,
             warning_thread_count=100,
     ):
         try:
@@ -137,8 +150,10 @@ class UsageLogPlugin(JmOptionPlugin):
             sleep(interval)
 
 
-# 参考: https://github.com/hect0x7/JMComic-Crawler-Python/issues/95
 class FindUpdatePlugin(JmOptionPlugin):
+    """
+    参考: https://github.com/hect0x7/JMComic-Crawler-Python/issues/95
+    """
     plugin_key = 'find_update'
 
     def invoke(self, **kwargs) -> None:
@@ -186,6 +201,7 @@ class FindUpdatePlugin(JmOptionPlugin):
 class ZipPlugin(JmOptionPlugin):
     plugin_key = 'zip'
 
+    # noinspection PyAttributeOutsideInit
     def invoke(self,
                album: JmAlbumDetail,
                downloader,
@@ -198,49 +214,39 @@ class ZipPlugin(JmOptionPlugin):
 
         from .jm_downloader import JmDownloader
         downloader: JmDownloader
+        self.downloader = downloader
+        self.level = level
+        self.delete_original_file = delete_original_file
 
+        # 确保压缩文件所在文件夹存在
         zip_dir = JmcomicText.parse_to_abspath(zip_dir)
         mkdir_if_not_exists(zip_dir)
+
+        # 原文件夹 -> zip文件
+        dir_zip_dict = {}
         photo_dict = downloader.all_downloaded[album]
-        original_file_dir_list = []
 
         if level == 'album':
             zip_path = self.get_zip_path(album, None, filename_rule, suffix, zip_dir)
-            original_file_dir_list.append(
-                self.zip_album(album, photo_dict, zip_path)
-            )
+            dir_path = self.zip_album(album, photo_dict, zip_path)
+            dir_zip_dict[dir_path] = zip_path
 
         elif level == 'photo':
-            # dst_file_list = []
-
             for photo, image_list in photo_dict.items():
                 zip_path = self.get_zip_path(None, photo, filename_rule, suffix, zip_dir)
-                original_file_dir_list.append(
-                    self.zip_photo(photo, image_list, zip_path)
-                )
-                # dst_file_list.append(zip_path)
+                dir_path = self.zip_photo(photo, image_list, zip_path)
+                dir_zip_dict[dir_path] = zip_path
 
         else:
-            raise NotImplementedError(f'level: {level}')
+            ExceptionTool.raises(f'Not Implemented Zip Level: {level}')
 
-        if delete_original_file is True:
-            self.delete_all_files(downloader.all_downloaded, original_file_dir_list)
-
-    # noinspection PyMethodMayBeStatic
-    def delete_all_files(self, all_downloaded: dict, dir_list: List[str]):
-        import os
-        for album, photo_dict in all_downloaded.items():
-            for photo, image_list in photo_dict.items():
-                for f, image in image_list:
-                    os.remove(f)
-                    jm_debug('plugin.zip.remove', f'移除原文件: {f}')
-
-        for d in dir_list:
-            if len(files_of_dir(d)) == 0:
-                os.removedirs(d)
-                jm_debug('plugin.zip.remove', f'移除文件夹: {d}')
+        self.after_zip(dir_zip_dict)
 
     def zip_photo(self, photo, image_list: list, zip_path: str):
+        """
+        压缩photo文件夹
+        @return: photo文件夹路径
+        """
         photo_dir = self.option.decide_image_save_dir(photo) \
             if len(image_list) == 0 \
             else os.path.dirname(image_list[0][0])
@@ -257,6 +263,10 @@ class ZipPlugin(JmOptionPlugin):
         return photo_dir
 
     def zip_album(self, album, photo_dict: dict, zip_path):
+        """
+        压缩album文件夹
+        @return: album文件夹路径
+        """
         album_dir = self.option.decide_album_dir(album)
         all_filepath: Set[str] = set()
 
@@ -279,8 +289,19 @@ class ZipPlugin(JmOptionPlugin):
         jm_debug('plugin.zip.finish', f'压缩本子[{album.album_id}]成功 → {zip_path}')
         return album_dir
 
+    def after_zip(self, dir_zip_dict: Dict[str, str]):
+        # 是否要删除所有原文件
+        if self.delete_original_file is True:
+            self.delete_all_files_and_empty_dir(
+                all_downloaded=self.downloader.all_downloaded,
+                dir_list=list(dir_zip_dict.keys())
+            )
+
     # noinspection PyMethodMayBeStatic
     def get_zip_path(self, album, photo, filename_rule, suffix, zip_dir):
+        """
+        计算zip文件的路径
+        """
         filename = DirRule.apply_rule_directly(album, photo, filename_rule)
         from os.path import join
         return join(
@@ -288,8 +309,45 @@ class ZipPlugin(JmOptionPlugin):
             filename + fix_suffix(suffix),
         )
 
+    # noinspection PyMethodMayBeStatic
+    def delete_all_files_and_empty_dir(self, all_downloaded: dict, dir_list: List[str]):
+        """
+        删除所有文件和文件夹
+        """
+        import os
+        for album, photo_dict in all_downloaded.items():
+            for photo, image_list in photo_dict.items():
+                for f, image in image_list:
+                    os.remove(f)
+                    jm_debug('plugin.zip.remove', f'删除原文件: {f}')
 
-JmModuleConfig.register_plugin(JmLoginPlugin)
-JmModuleConfig.register_plugin(UsageLogPlugin)
-JmModuleConfig.register_plugin(FindUpdatePlugin)
-JmModuleConfig.register_plugin(ZipPlugin)
+        for d in dir_list:
+            if len(os.listdir(d)) == 0:
+                os.removedirs(d)
+                jm_debug('plugin.zip.remove', f'删除文件夹: {d}')
+
+
+class ClientProxyPlugin(JmOptionPlugin):
+    plugin_key = 'client_proxy'
+
+    def invoke(self,
+               proxy_client_key,
+               whitelist=None,
+               **kwargs,
+               ) -> None:
+        if whitelist is not None:
+            whitelist = set(whitelist)
+
+        clazz = JmModuleConfig.client_impl_class(proxy_client_key)
+        clazz_init_kwargs = kwargs
+        new_jm_client = self.option.new_jm_client
+
+        def hook_new_jm_client(*args, **kwargs):
+            client = new_jm_client(*args, **kwargs)
+            if whitelist is not None and client.client_key not in whitelist:
+                return client
+
+            jm_debug('plugin.client_proxy', f'proxy client {client} with {proxy_client_key}')
+            return clazz(client, **clazz_init_kwargs)
+
+        self.option.new_jm_client = hook_new_jm_client
